@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"io"
@@ -26,7 +26,7 @@ type Server struct {
 	handlers map[string]http.Handler
 }
 
-func NewServer(bucket nats.ObjectStore, locks nats.KeyValue) *Server {
+func New(bucket nats.ObjectStore, locks nats.KeyValue) *Server {
 	s := &Server{
 		bucket: bucket,
 		locks:  locks,
