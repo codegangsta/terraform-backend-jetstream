@@ -68,7 +68,7 @@ func main() {
 
 	s := NewServer(objectStore, locks)
 
-	http.Handle("/state/", http.StripPrefix("/state", s))
+	http.Handle("/state/", http.StripPrefix("/state/", s))
 
 	log.Println("Listening on port", port)
 	http.ListenAndServe(":"+port, http.DefaultServeMux)

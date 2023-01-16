@@ -4,6 +4,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/codegangsta/mixer"
 	"github.com/nats-io/nats.go"
@@ -35,9 +36,12 @@ func NewServer(bucket nats.ObjectStore, locks nats.KeyValue) *Server {
 		return &Context{Context: ctx}
 	})
 
-	// Parse name
-	m.Before(func(ctx *Context) {
-		ctx.name = ctx.Request().URL.Path
+	m.Before(func(c *Context) {
+		c.name = strings.TrimPrefix(c.Request().URL.Path, "/")
+	})
+
+	m.Before(func(c *Context) {
+		log.Printf("%s %s\n", c.Request().Method, c.name)
 	})
 
 	s.handlers = map[string]http.Handler{
@@ -103,8 +107,6 @@ func (s *Server) lockState(c *Context) {
 		return
 	}
 
-	log.Printf("Locking %s:%s", c.name, string(bytes))
-
 	_, err = s.locks.Create(c.name, bytes)
 	if err != nil {
 		http.Error(c.ResponseWriter(), "Locked", http.StatusLocked)
@@ -115,8 +117,6 @@ func (s *Server) lockState(c *Context) {
 }
 
 func (s *Server) unlockState(c *Context) {
-	log.Printf("Unlocking %s", c.name)
-
 	err := s.locks.Delete(c.name)
 	if err != nil {
 		c.Error(err)
