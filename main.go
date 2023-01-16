@@ -1,25 +1,45 @@
 package main
 
 import (
-	"io"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/nats-io/jsm.go/natscontext"
 	"github.com/nats-io/nats.go"
 )
 
+var (
+	port        = os.Getenv("PORT")
+	context     = os.Getenv("CONTEXT")
+	bucket      = os.Getenv("BUCKET")
+	maxBytesStr = os.Getenv("MAX_BYTES")
+)
+
 func main() {
-	port := "54222"
-	context := ""
-	bucketName := "terraform-state"
+	if port == "" {
+		port = "54222"
+	}
+
+	if bucket == "" {
+		bucket = "terraform-state"
+	}
+
 	maxBytes := 1024 * 1024 * 512
+	if maxBytesStr != "" {
+		var err error
+		maxBytes, err = strconv.Atoi(maxBytesStr)
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}
 
 	nc, err := natscontext.Connect(context)
 	if err != nil {
 		log.Fatalln(err)
 	}
+	log.Println("Connected to NATS server", nc.ConnectedUrl())
 
 	js, err := nc.JetStream()
 	if err != nil {
@@ -27,64 +47,29 @@ func main() {
 	}
 
 	objectStore, err := js.CreateObjectStore(&nats.ObjectStoreConfig{
-		Bucket:      bucketName,
+		Bucket:      bucket,
 		Description: "Stores terraform state",
 		MaxBytes:    int64(maxBytes),
 	})
 	if err != nil {
 		log.Fatalln(err)
 	}
+	log.Println("Using JetStream object store bucket", bucket)
 
-	r := chi.NewRouter()
-
-	r.Route("/state/{name}", func(r chi.Router) {
-		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-			name := chi.URLParam(r, "name")
-
-			bytes, err := objectStore.GetBytes(name)
-			if err != nil {
-				log.Println("Error", err)
-				http.Error(w, "Not found", http.StatusNotFound)
-				return
-			}
-
-			w.Write(bytes)
-		})
-
-		r.Post("/", func(w http.ResponseWriter, r *http.Request) {
-			name := chi.URLParam(r, "name")
-
-			bytes, err := io.ReadAll(r.Body)
-			if err != nil {
-				log.Println("Error", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
-
-			_, err = objectStore.PutBytes(name, bytes)
-			if err != nil {
-				log.Println("Error", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
-
-			w.WriteHeader(http.StatusOK)
-		})
-
-		r.Delete("/", func(w http.ResponseWriter, r *http.Request) {
-			name := chi.URLParam(r, "name")
-
-			err = objectStore.Delete(name)
-			if err != nil {
-				log.Println("Error", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
-
-			w.WriteHeader(http.StatusOK)
-		})
+	locks, err := js.CreateKeyValue(&nats.KeyValueConfig{
+		Bucket:      bucket + "-locks",
+		Description: "Stores locks for terraform state bucket " + bucket,
+		MaxBytes:    1024 * 1024,
 	})
+	if err != nil {
+		log.Fatalln(err)
+	}
+	log.Println("Using JetStream kv", bucket+"-locks", "for locking")
+
+	s := NewServer(objectStore, locks)
+
+	http.Handle("/state/", http.StripPrefix("/state", s))
 
 	log.Println("Listening on port", port)
-	http.ListenAndServe(":"+port, r)
+	http.ListenAndServe(":"+port, http.DefaultServeMux)
 }
